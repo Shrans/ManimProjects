@@ -9,4 +9,4 @@
 - `projects\`：存放Manim源码
 ## 项目目录
 - Vol.12-Stronghold.py：[【Minecraft】一眼盯真！零误差如何实现？如何通过1颗末影之眼估算要塞？定位要塞的数学原理解析](https://www.bilibili.com/video/BV1fo4y1776y)
-- Vol.13-Ninjabrain Bot.py：[【Minecraft】揭秘Ninjabrain Bot：要塞定位与统计学——如何用统计学实现零误差定位要塞](https://www.bilibili.com/video/BV1L1421t7kS)
+- Vol.13-NinjabrainBot.py：[【我的世界 X 统计学】利用统计学实现真正的零误差定位要塞——揭秘NinjabrainBot](https://www.bilibili.com/video/BV1r4WEe6EkB)

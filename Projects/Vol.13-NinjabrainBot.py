@@ -1,8 +1,11 @@
 from manimlib import *
 
 
-# 该函数来自Manim Kindergarten Sandbox
 def debug(self, tex, scale_factor=0.6, text_color=PURPLE):
+    """
+    该调试函数来自Manim Kindergarten Sandbox：
+    https://github.com/manim-kindergarten/manim_sandbox/blob/master/utils/functions/debugTeX.py
+    """
     for i, j in enumerate(tex):
         tex_id = Text(str(i), font="Consolas").scale(scale_factor).set_color(text_color)
         tex_id.move_to(j)
@@ -19,20 +22,115 @@ def arc_text(text, radius, angle, arc_buff):
     return arc
 
 
-def cords_generator(px, py, t1, t2, r1, r2, dots):
+def fov(player, line, fov_x, p_x, p_y, axe, sigma):
+    # 获取中心直线的倾斜角并计算视野上下界的倾斜角
+    theta_1 = line.get_angle() - (sigma * DEGREES)
+    theta_2 = line.get_angle() + (sigma * DEGREES)
+    # 根据给定的视野上下界x轴坐标计算y轴坐标
+    fov1_y = (np.tan(theta_1) * (fov_x - p_x)) + p_y
+    fov2_y = (np.tan(theta_2) * (fov_x - p_x)) + p_y
+    # 坐标系转换
+    end1 = axe.c2p(fov_x, fov1_y)
+    end2 = axe.c2p(fov_x, fov2_y)
+    # 构建视野上下界直线
+    l1 = Line(start=player.get_center(), end=end1, stroke_width=1.5, color=GREY_C, dash_length=0.2).set_opacity(0.7)
+    l2 = Line(start=player.get_center(), end=end2, stroke_width=1.5, color=GREY_C, dash_length=0.2).set_opacity(0.7)
+    return l1, l2
+
+
+def cords_generator(px, py, t1, t2, r1, r2, dots, target_attr: dict, back_attr: dict):
+    """
+    这里用到的算法逻辑是根据某个点与视野上下界直线的上下左右相对关系判断该点是否位于视野范围内。
+    另外，当t2 > 0 > t1时（t1和t2表示视野上下界直线的斜率），对于任意一个在视野范围内的点，其平行于X轴的水平线只会和视野上下界直线有一个交点。
+    注意：这里的候选要塞集合G的获取算法不具备一般性，因为这是在给定的点都是区块中心点的前提下，进一步筛选出位于环内且在视野中的点。
+    而在实际游戏中还需要先得到位于视野范围内的所有区块中心点。同时该算法也仅考虑了在视频中会出现的情况。
+    另一种已验证过且已实际应用的算法参见：https://github.com/Shrans/Stronghold-Locator
+    """
     target_temp = []
     not_target_temp = []
-    for item in dots:
-        pos_x, pos_y = item.get_center()[0], item.get_center()[1]
-        by = (t1 * (pos_x - px)) + py
-        uy = (t2 * (pos_x - px)) + py
-        lx = ((pos_y - py) / t2) + px
-        rx = ((pos_y - py) / t1) + px
-        if by < pos_y < uy and lx < pos_x < rx and r1 <= np.sqrt(pos_x ** 2 + pos_y ** 2) <= r2:
-            target_temp.append((pos_x, pos_y))
-        else:
-            not_target_temp.append((pos_x, pos_y))
-    return target_temp, not_target_temp
+    if t2 > t1 > 0:
+        for item in dots:
+            pos_x, pos_y = item.get_center()[0], item.get_center()[1]
+            by = (t1 * (pos_x - px)) + py
+            uy = (t2 * (pos_x - px)) + py
+            lx = ((pos_y - py) / t2) + px
+            rx = ((pos_y - py) / t1) + px
+            if by < pos_y < uy and lx < pos_x < rx and r1 <= np.sqrt(pos_x ** 2 + pos_y ** 2) <= r2:
+                target_temp.append((pos_x, pos_y))
+            else:
+                not_target_temp.append((pos_x, pos_y))
+    elif t2 > 0 > t1:
+        for item in dots:
+            pos_x, pos_y = item.get_center()[0], item.get_center()[1]
+            by = (t1 * (pos_x - px)) + py
+            uy = (t2 * (pos_x - px)) + py
+            lx = ((pos_y - py) / t1) + px
+            if by < pos_y < uy and lx < pos_x and r1 <= np.sqrt(pos_x ** 2 + pos_y ** 2) <= r2:
+                target_temp.append((pos_x, pos_y))
+            else:
+                not_target_temp.append((pos_x, pos_y))
+    target_group = VGroup(
+        *[Dot(point=np.array((item[0], item[1], 0)), **target_attr) for item in target_temp])
+    not_target_group = VGroup(
+        *[Dot(point=np.array((item[0], item[1], 0)), **back_attr) for item in not_target_temp])
+    print(len(target_group))
+    return target_temp, not_target_temp, target_group, not_target_group
+
+
+def groups_to_sets(group):
+    """
+    这个函数用来将VGroup内的VMobject的二位坐标导出为集合
+    """
+    temp = []
+    for item in group:
+        temp_list = []
+        for obj in item:
+            temp_list.append((obj.get_center()[0], obj.get_center()[1]))
+        temp.append(temp_list)
+    result = [set(x) for x in temp]
+    return result
+
+
+def intersection(groups, obj, kwarg: dict):
+    sets = groups_to_sets(groups)
+    final_list = list(reduce(set.intersection, sets))
+    result = VGroup(*[obj(**kwarg).move_to(np.array((item[0], item[1], 0))) for item in final_list])
+    return result
+
+
+def union(groups, obj, kwarg: dict):
+    sets = groups_to_sets(groups)
+    final_list = list(reduce(set.union, sets))
+    result = VGroup(*[obj(**kwarg).move_to(np.array((item[0], item[1], 0))) for item in final_list])
+    return result
+
+
+def difference(groups, obj, kwarg: dict):
+    sets = groups_to_sets(groups)
+    final_list = list(reduce(set.difference, sets))
+    result = VGroup(*[obj(**kwarg).move_to(np.array((item[0], item[1], 0))) for item in final_list])
+    return result
+
+
+def extension(center, radius, group, axe_attr: dict, return_axe=False):
+    """
+    这里利用一个逐渐扩大的圆将位于其边界附近的物体重组为一个新列表，从而实现扩散动画
+    """
+    animation_axe = Axes(**axe_attr).move_to(center)
+    result = VGroup()
+    for r in range(radius):
+        anim_list_dots_sub = VGroup()
+        for idx in range(len(group)):
+            loc_cor = animation_axe.p2c(group[idx].get_center())
+            x, y = round(loc_cor[0]), round(loc_cor[1])
+            if (r - 1) <= np.sqrt((x ** 2) + (y ** 2)) <= (r + 1):
+                anim_list_dots_sub.add(group[idx])
+        result.add(anim_list_dots_sub)
+    result = VGroup(*[item for item in result if len(item) != 0])
+    if return_axe:
+        return result, animation_axe
+    else:
+        return result
 
 
 ########################################################################################################################
@@ -88,18 +186,20 @@ class Scene1(Scene):  # 50
         self.wait()
 
 
-class Scene2(Scene):  # 253
+class Scene2(Scene):  # 293
     def construct(self):
         axes = Axes(
             x_range=(-960, 960),
             y_range=(-540, 540),
             height=9,
             width=16,
-            axis_config={"include_tip": True, "include_ticks": False},
+            axis_config={"include_tip": False, "include_ticks": False},
         ).move_to(ORIGIN)
+        target_dot_attr = {'radius': 0.02, 'color': YELLOW_D}
+        back_dot_attr = {'radius': 0.007, 'color': GREY_C}
         coord_group = [(x, y) for y in range(-540, 540) for x in range(-960, 960) if
                        ((x - 12) / 24) % 1 == 0 and ((y - 12) / 24) % 1 == 0]
-        dot_group = VGroup(*[Dot(point=axes.c2p(item[0], item[1]), radius=0.007, color=GREY_C) for item in coord_group])
+        dot_group = VGroup(*[Dot(point=axes.c2p(item[0], item[1]), **back_dot_attr) for item in coord_group])
         vertical_dots = VGroup()
         temp = VGroup()
         for idx in range(0, len(dot_group)):
@@ -117,7 +217,6 @@ class Scene2(Scene):  # 253
                                  ).set_color(color=BLUE_D).set_style(stroke_width=1)
         annulus_fill = Circle(radius=2.048 * rate, stroke_width=153.6 * rate, stroke_opacity=0.5, color=BLUE_D)
         origin = Dot(point=ORIGIN, radius=0.05, color="#70AD47")
-
         # 参数定义
         player_x, player_y = 50, -120
         cle_x, cle_y = 1034, 1100
@@ -126,28 +225,12 @@ class Scene2(Scene):  # 253
         player = Dot(point=axes.c2p(player_x, player_y), radius=0.05, color="#8C3FC5")
         # 构建中心直线
         central_line = Line(start=player.get_center(), end=axes.c2p(cle_x, cle_y), stroke_width=2.5, color="#E73750")
-        # 获取中心直线的倾斜角并计算视野上下界的倾斜角
-        theta_1 = central_line.get_angle() - (sigma * DEGREES)
-        theta_2 = central_line.get_angle() + (sigma * DEGREES)
-        # 根据给定的视野上下界x轴坐标计算y轴坐标
-        fov1_y = (np.tan(theta_1) * (fov_x - player_x)) + player_y
-        fov2_y = (np.tan(theta_2) * (fov_x - player_x)) + player_y
-        # 构建视野上下界
-        fov1_l = DashedLine(start=player.get_center(), end=axes.c2p(fov_x, fov1_y), stroke_width=1.5, color="#8B8B8B",
-                            dash_length=0.2).set_opacity(0.7)
-        fov2_l = DashedLine(start=player.get_center(), end=axes.c2p(fov_x, fov2_y), stroke_width=1.5, color="#8B8B8B",
-                            dash_length=0.2).set_opacity(0.7)
-        # 获取候选要塞坐标集合
-        target_list, not_target_list = cords_generator(
+        # 构建视野上下界直线
+        fov1_l, fov2_l = fov(player, central_line, fov_x, player_x, player_y, axes, sigma)
+        # 获取候选要塞集合和非候选要塞集合
+        target_list, not_target_list, target_dot_group, not_target_dot_group = cords_generator(
             player.get_center()[0], player.get_center()[1], fov1_l.get_slope(), fov2_l.get_slope(),
-            1.28 * rate, 2.816 * rate, dot_group)
-        # 构建候选要塞点集合
-        target_dot_group = VGroup(
-            *[Dot(point=np.array((item[0], item[1], 0)), radius=0.02, color=YELLOW_D) for item in target_list])
-        not_target_dot_group = VGroup(
-            *[Dot(point=np.array((item[0], item[1], 0)), radius=0.007, color=GREY_C) for item in not_target_list])
-        print(len(target_dot_group))
-
+            1.28 * rate, 2.816 * rate, dot_group, target_dot_attr, back_dot_attr)
         self.play(
             LaggedStart(
                 *[FadeIn(vertical_dots[-anim]) for anim in range(-len(vertical_dots) + 1, 1)],
@@ -169,7 +252,7 @@ class Scene2(Scene):  # 253
             rate_func=smooth
         )
         self.wait()
-        player.add_updater(lambda obj: self.bring_to_front(obj))
+        player.add_updater(lambda item: self.bring_to_front(item))
         self.play(
             ShowCreation(fov1_l),
             ShowCreation(fov2_l),
@@ -186,7 +269,7 @@ class Scene2(Scene):  # 253
             ),
             rate_func=smooth
         )
-        final = target_dot_group[20].copy().set_color(RED).scale(2)
+        final_dot = target_dot_group[20].copy().set_color(RED).scale(2)
         self.wait()
         self.remove(dot_group).add(not_target_dot_group).bring_to_back(not_target_dot_group)
         target_dot_group_trans = VGroup(*[Dot(radius=0.05, color=YELLOW_D) for _ in range(len(target_dot_group))])
@@ -228,12 +311,12 @@ class Scene2(Scene):  # 253
         self.play(
             FadeOut(mask),
             set_g.animate.scale(0.5).shift(RIGHT * 2.5 + UP * 0.7),
-            self.camera.frame.animate.scale(0.8).move_to(final.get_center()),
+            self.camera.frame.animate.scale(0.8).move_to(final_dot.get_center()),
             run_time=1.5,
             rate_func=smooth
         )
         self.play(
-            FadeInFromPoint(final, set_g.get_center()),
+            FadeInFromPoint(final_dot, set_g.get_center()),
             run_time=1,
             rate_func=smooth
         )
@@ -241,8 +324,8 @@ class Scene2(Scene):  # 253
         self.play(
             LaggedStart(
                 *[FadeInFromPoint(target_dot_group[idx], set_g.get_center()) for idx in range(0, 20)],
-                ReplacementTransform(final, target_dot_group[20]),
-                *[FadeInFromPoint(target_dot_group[idx], set_g.get_center()) for idx in range(21, len(target_dot_group))],
+                ReplacementTransform(final_dot, target_dot_group[20]),
+                *[FadeInFromPoint(target_dot_group[idx], set_g.get_center()) for idx in range(21, len(target_list))],
                 run_time=1,
                 lag_ratio=0.1,
                 rate_func=rush_from
@@ -254,36 +337,18 @@ class Scene2(Scene):  # 253
         cle_x_2, cle_y_2 = 800, 340
         fov_x_2 = 700
         player_2 = Dot(point=axes.c2p(player_x_2, player_y_2), radius=0.05, color="#8C3FC5")
-        # 构建中心直线
         central_line_2 = Line(
             start=player_2.get_center(), end=axes.c2p(cle_x_2, cle_y_2), stroke_width=2.5, color="#E73750")
-        # 获取中心直线的倾斜角并计算视野上下界的倾斜角
-        theta_1_2 = central_line_2.get_angle() - (sigma * DEGREES)
-        theta_2_2 = central_line_2.get_angle() + (sigma * DEGREES)
-        # 根据给定的视野上下界x轴坐标计算y轴坐标
-        fov1_y_2 = (np.tan(theta_1_2) * (fov_x_2 - player_x_2)) + player_y_2
-        fov2_y_2 = (np.tan(theta_2_2) * (fov_x_2 - player_x_2)) + player_y_2
-        # 构建视野上下界
-        fov1_l_2 = DashedLine(start=player_2.get_center(), end=axes.c2p(fov_x_2, fov1_y_2),
-                              stroke_width=1.5, color="#8B8B8B", dash_length=0.2).set_opacity(0.7)
-        fov2_l_2 = DashedLine(start=player_2.get_center(), end=axes.c2p(fov_x_2, fov2_y_2),
-                              stroke_width=1.5, color="#8B8B8B", dash_length=0.2).set_opacity(0.7)
-        # 获取候选要塞坐标集合
-        target_list_2, not_target_list_2 = cords_generator(
+        fov1_l_2, fov2_l_2 = fov(player_2, central_line_2, fov_x_2, player_x_2, player_y_2, axes, sigma)
+        target_list_2, not_target_list_2, target_dot_group_2, not_target_dot_group_2 = cords_generator(
             player_2.get_center()[0], player_2.get_center()[1], fov1_l_2.get_slope(), fov2_l_2.get_slope(),
-            1.28 * rate, 2.816 * rate, dot_group)
-        # 构建候选要塞点集合
-        target_dot_group_2 = VGroup(
-            *[Dot(point=np.array((item[0], item[1], 0)), radius=0.02, color=YELLOW_D) for item in target_list_2])
-        not_target_dot_group_2 = VGroup(
-            *[Dot(point=np.array((item[0], item[1], 0)), radius=0.007, color=GREY_C) for item in not_target_list_2])
-        print(len(target_dot_group_2))
+            1.28 * rate, 2.816 * rate, dot_group, target_dot_attr, back_dot_attr)
         self.play(
             GrowFromCenter(player_2),
             run_time=1,
             rate_func=smooth,
         )
-        player_2.add_updater(lambda obj: self.bring_to_front(obj))
+        player_2.add_updater(lambda item: self.bring_to_front(item))
         self.play(
             self.camera.frame.animate.scale(1.4).shift(LEFT * 0.9 + DOWN * 0.9),
             set_g.animate.shift(RIGHT * 0.3 + DOWN * 0.8),
@@ -298,20 +363,91 @@ class Scene2(Scene):  # 253
             rate_func=smooth,
         )
         self.wait()
-        set_g.add_updater(lambda obj: self.bring_to_front(obj))
-        # 计算候选要塞集合
-        temp_1 = [item for item in target_dot_group]
-        temp_2 = [item for item in target_dot_group_2]
-        target_dot_group_union = VGroup(*[item for item in list(set(temp_1).union(set(temp_2)))])
-        # 计算非候选要塞集合
-        temp_3 = [(item.get_center()[0], item.get_center()[1]) for item in dot_group]
-        temp_4 = [(item.get_center()[0], item.get_center()[1]) for item in not_target_dot_group]
-        temp_5 = [(item.get_center()[0], item.get_center()[1]) for item in not_target_dot_group_2]
-        not_target_dot_group_all = VGroup(*[Dot(point=np.array((item[0], item[1], 0)), radius=0.007, color=GREY_C) for item in temp_3 if item in temp_4 and item in temp_5])
-        self.remove(not_target_dot_group).remove(target_dot_group_2).add(not_target_dot_group_all, target_dot_group_union, set_g)
+        set_g.add_updater(lambda item: self.bring_to_front(item))
+
+        # 计算前两个视野的交集
+        target_dots_12 = intersection(groups=[target_dot_group, target_dot_group_2], obj=Dot, kwarg=target_dot_attr)
+        self.camera.frame.save_state()
+        self.add(target_dots_12)
+        self.play(
+            self.camera.frame.animate.scale(0.5).shift(RIGHT * 0.7 + UP * 0.6),
+            *[FadeOutToPoint(item, item.get_center()) for item in target_dot_group],
+            *[FadeOutToPoint(item, item.get_center()) for item in target_dot_group_2],
+            FadeIn(not_target_dot_group_2),
+            FadeOut(central_line),
+            FadeOut(central_line_2),
+            run_time=2,
+            rate_func=rush_from
+        )
+        self.wait()
+        set_g.shift(LEFT * 0.3 + DOWN * 1.5)
+        # 构建第三个视野
+        player_x_3, player_y_3 = 50, 150
+        cle_x_3, cle_y_3 = 800, 110
+        fov_x_3 = 1200
+        player_3 = Dot(point=axes.c2p(player_x_3, player_y_3), radius=0.05, color="#8C3FC5")
+        central_line_3 = Line(
+            start=player_3.get_center(), end=axes.c2p(cle_x_3, cle_y_3), stroke_width=2.5, color="#E73750")
+        fov1_l_3, fov2_l_3 = fov(player_3, central_line_3, fov_x_3, player_x_3, player_y_3, axes, sigma)
+        target_list_3, not_target_list_3, target_dot_group_3, not_target_dot_group_3 = cords_generator(
+            player_3.get_center()[0], player_3.get_center()[1], fov1_l_3.get_slope(), fov2_l_3.get_slope(),
+            1.28 * rate, 2.816 * rate, dot_group, target_dot_attr, back_dot_attr)
+        # 计算前所有个视野的交集
+        target_dots_123 = intersection(groups=[target_dots_12, target_dot_group_3], obj=Dot, kwarg=target_dot_attr)
+        self.add(target_dots_123)
+        self.remove(not_target_dot_group, not_target_dot_group_2).add(dot_group).bring_to_back(dot_group)
+        self.play(
+            target_dot_group[20].animate.set_color(RED).scale(2),
+            ShowCreation(fov1_l_3),
+            ShowCreation(fov2_l_3),
+            GrowFromCenter(player_3),
+            *[FadeOutToPoint(item, item.get_center()) for item in target_dots_12],
+            run_time=2,
+            rate_func=rush_from
+        )
+        self.wait()
+        animation_axe_attr = {"x_range": (-100, 100), "y_range": (-100, 100), "height": 2.5, "width": 2.5}
+        all_target_dots = union(
+            groups=[target_dot_group, target_dot_group_2, target_dot_group_3], obj=Dot, kwarg=target_dot_attr)
+        all_target_back_dots = union(
+            groups=[target_dot_group, target_dot_group_2, target_dot_group_3], obj=Dot, kwarg=back_dot_attr)
+        all_not_target_dots = difference(groups=[dot_group, all_target_dots], obj=Dot, kwarg=back_dot_attr)
+        anim_dots = extension(
+            center=final_dot.get_center(), radius=150, group=all_target_dots, axe_attr=animation_axe_attr)
+        anim_back_dots = extension(
+            center=final_dot.get_center(), radius=150, group=all_target_back_dots, axe_attr=animation_axe_attr)
+        target_dots_123.add_updater(lambda item: self.bring_to_front(item))
+        anim_back_dots[0][0].set_opacity(0)
+        self.remove(dot_group).add(all_not_target_dots, anim_back_dots).bring_to_back(all_not_target_dots)
+        self.play(
+            AnimationGroup(
+                self.camera.frame.animate.restore(),
+                run_time=1.5,
+                rate_func=smooth
+            ),
+            LaggedStart(
+                AnimationGroup(
+                    ReplacementTransform(target_dot_group[20], anim_dots[0][0]),
+                    run_time=0.5,
+                    rate_func=rush_from
+                ),
+                AnimationGroup(
+                    LaggedStart(
+                        *[ReplacementTransform(anim_back_dots[idx], anim_dots[idx]) for idx in range(len(anim_dots))],
+                        run_time=1,
+                        lag_ratio=0.3,
+                        rate_func=smooth
+                    )
+                ),
+                lag_ratio=0.5,
+                rate_func=rush_from
+            ),
+        )
+        self.wait()
+        self.remove(target_dots_123)
         self.play(
             LaggedStart(
-                *[FadeOutToPoint(target_dot_group_union[anim], set_g[1].get_center()) for anim in range(0, len(target_dot_group_union))],
+                *[FadeOutToPoint(anim_dots[anim], set_g[1].get_center()) for anim in range(len(anim_dots))],
                 run_time=1.5,
                 lag_ratio=0.1,
                 rate_func=rush_from
@@ -319,23 +455,25 @@ class Scene2(Scene):  # 253
             Indicate(set_g[1], run_time=1.5),
         )
         self.wait()
-        p1_fov1_indicate = DashedLine(start=player.get_center(), end=axes.c2p(fov_x, fov1_y), stroke_width=1.5, color=YELLOW_D, dash_length=0.2)
-        p1_fov2_indicate = DashedLine(start=player.get_center(), end=axes.c2p(fov_x, fov2_y), stroke_width=1.5, color=YELLOW_D, dash_length=0.2)
-        p2_fov1_indicate = DashedLine(start=player_2.get_center(), end=axes.c2p(fov_x_2, fov1_y_2), stroke_width=1.5, color=YELLOW_D, dash_length=0.2)
-        p2_fov2_indicate = DashedLine(start=player_2.get_center(), end=axes.c2p(fov_x_2, fov2_y_2), stroke_width=1.5, color=YELLOW_D, dash_length=0.2)
+        fov_list = [fov1_l, fov2_l, fov1_l_2, fov2_l_2, fov1_l_3, fov2_l_3]
+        indicators = [item.copy().set_color(YELLOW_D) for item in fov_list]
         self.play(
-            *[ShowCreationThenDestruction(item) for item in [p1_fov1_indicate, p1_fov2_indicate, p2_fov1_indicate, p2_fov2_indicate]],
+            *[ShowCreationThenDestruction(item) for item in indicators],
+            *[ShowCreation(item) for item in [central_line, central_line_2, central_line_3]],
             run_time=1,
             rate_func=smooth
         )
         self.wait()
-        set_g.clear_updaters()
-        player.clear_updaters()
-        player_2.clear_updaters()
+        updaters_clear = [set_g, player, player_2, target_dots_123]
+        for obj in updaters_clear:
+            obj.clear_updaters()
         p1 = VGroup(fov1_l, fov2_l, central_line, player)
+        fadeout = [all_not_target_dots, axes, origin, player_2, player_3, fov1_l_2, fov2_l_2, fov1_l_3, fov2_l_3, set_g,
+                   arc_text_1280, arc_text_2816, text_1280, text_2816, annulus_fill]
         self.play(
-            *[FadeOut(item) for item in [not_target_dot_group_all, axes, origin, player_2, central_line_2, fov1_l_2, fov2_l_2, set_g, arc_text_1280, arc_text_2816, text_1280, text_2816, annulus_fill]],
-            Rotating(p1, angle=np.arctan(-np.tan(central_line.get_angle())), about_point=player.get_center(), run_time=0.6),
+            Rotating(p1, angle=np.arctan(-np.tan(central_line.get_angle())),
+                     about_point=player.get_center(), run_time=0.6),
+            *[FadeOut(item) for item in fadeout],
             self.camera.frame.animate.scale(0.5).shift(RIGHT * 5 + DOWN * 1.65),
             run_time=2,
             rate_func=smooth
@@ -343,7 +481,7 @@ class Scene2(Scene):  # 253
         self.wait()
 
 
-class Scene3(Scene):  # 20
+class Scene3(Scene):  # 21
     def construct(self):
         axes = Axes(
             x_range=(-5, 5),
@@ -366,7 +504,7 @@ class Scene3(Scene):  # 20
         )
 
 
-class Scene4(Scene):  # 235
+class Scene4(Scene):  # 238
     def construct(self):
         gird = NumberPlane(
             faded_line_ratio=0,
@@ -606,7 +744,7 @@ class Scene4(Scene):  # 235
         self.wait()
 
 
-class Scene5(Scene):  # 310
+class Scene5(Scene):  # 312
     def waiting(self, second=0, frame=0, fps=60):
         self.wait(second + frame / fps)
 
@@ -637,14 +775,12 @@ class Scene5(Scene):  # 310
         radius_line_colored_temp = radius_line_colored.copy()
         arc_line_temp = arc_line.copy()
         radius_text = Tex(r"\mathsf{r}", font_size=48, color=GOLD
-                          ).move_to(radius_line.get_center()).shift(LEFT* 0.2 + UP * 0.2)
+                          ).move_to(radius_line.get_center()).shift(LEFT * 0.2 + UP * 0.2)
         angle_text = Tex(r"\mathsf{\theta}", font_size=42, color=BLUE
                          ).move_to(Arc(radius=1, angle=30 * DEGREES).point_from_proportion(0.5))
-        # self.add(str1)
         self.wait()
         self.bring_to_back(radar)
         self.play(
-            # str1.animate.scale(0.2).move_to(np.array([4.5 * np.cos(30 * DEGREES), 4.5 * np.sin(30 * DEGREES), 0])),
             GrowFromCenter(radar),
             GrowFromCenter(origin),
             run_time=1.5,
@@ -722,7 +858,9 @@ class Scene5(Scene):  # 310
             lambda obj: obj.move_to(arc3_buff.point_from_proportion(0.5)))
         self.play(
             self.camera.frame.animate.scale(2).move_to(ORIGIN),
-            *[FadeOut(item) for item in [radius_line_colored, vertical_line, base_line, arc_line, arc, location_text, angle_text, radius_text, base_line_temp, arc_line_temp, radius_line_colored_temp]],
+            *[FadeOut(item) for item in [radius_line_colored, vertical_line, base_line, arc_line, arc,
+                                         location_text, angle_text, radius_text, base_line_temp,
+                                         arc_line_temp, radius_line_colored_temp]],
             *[ShowCreation(item) for item in [os2l, os3l, str2, str3]],
             run_time=2,
             rate_func=smooth,
@@ -810,7 +948,7 @@ class Scene5(Scene):  # 310
         snap_arc_2 = Arc(angle=snap_angle_2, radius=1.5, color=BLUE
                          ).rotate(angle=snap_line_2.get_angle(), about_point=ORIGIN).reverse_points()
         snap_arc_2_buff = Arc(angle=snap_angle_2, radius=1.9, color=BLUE
-                         ).rotate(angle=snap_line_2.get_angle(), about_point=ORIGIN).reverse_points()
+                              ).rotate(angle=snap_line_2.get_angle(), about_point=ORIGIN).reverse_points()
         old_line_2 = DashedLine(start=ORIGIN, end=str2_dot.get_center(), dash_length=0.2, color=GREY)
         old_dot_2 = str2_dot.copy().set_color(GREY)
 
@@ -824,7 +962,7 @@ class Scene5(Scene):  # 310
         snap_arc_3 = Arc(angle=-snap_angle_3, radius=1.5, color=BLUE
                          ).rotate(angle=snap_line_3.get_angle(), about_point=ORIGIN).reverse_points()
         snap_arc_3_buff = Arc(angle=-snap_angle_3, radius=1.8, color=BLUE
-                         ).rotate(angle=snap_line_3.get_angle(), about_point=ORIGIN).reverse_points()
+                              ).rotate(angle=snap_line_3.get_angle(), about_point=ORIGIN).reverse_points()
         old_line_3 = DashedLine(start=ORIGIN, end=str3_dot.get_center(), dash_length=0.2, color=GREY)
         old_dot_3 = str3_dot.copy().set_color(GREY)
 
@@ -839,7 +977,7 @@ class Scene5(Scene):  # 310
         self.play(
             self.camera.frame.animate.scale(0.6).move_to(
                 Line(start=str2, end=str3).get_center()).shift(LEFT * 0.15 + UP * 0.2),
-            *[FadeOutToPoint(item, item.get_center()) for item in [str1, str2, str3, angle_text_120_1, angle_text_120_2]],
+            *[FadeOutToPoint(obj, obj.get_center()) for obj in [str1, str2, str3, angle_text_120_1, angle_text_120_2]],
             FadeOutToPoint(arc1, ORIGIN),
             FadeOutToPoint(arc2, ORIGIN),
             *[FadeIn(item) for item in [str1_dot, str2_dot, str3_dot]],
@@ -920,9 +1058,10 @@ class Scene5(Scene):  # 310
         )
 
 
-class Scene6(Scene):  # 20
+class Scene6(Scene):  # 21
     def construct(self):
-        formula = Tex(r"{\color[RGB]{64,62,59}P_{\text{最终}}", r"=", r"P(", r"\text{测量的误差}", r")\cdot P(", r"\text{最近的要塞}", r")}}", font_size=72)
+        formula = Tex(r"{\color[RGB]{64,62,59}P_{\text{最终}}", r"=", r"P(", r"\text{测量的误差}",
+                      r")\cdot P(", r"\text{最近的要塞}", r")}}", font_size=72)
         self.play(
             GrowFromCenter(formula[0]),
             run_time=1.5,
@@ -942,7 +1081,7 @@ class Scene6(Scene):  # 20
         self.wait()
 
 
-class Scene7(Scene):  # 168
+class Scene7(Scene):  # 146
     def construct(self):
         def value_updater(value):
             return lambda obj: obj.set_value(value * 0.2 * value_tracker.get_value()).move_to(
@@ -959,6 +1098,8 @@ class Scene7(Scene):  # 168
             width=16,
             axis_config={"include_tip": True, "include_ticks": False},
         ).move_to(ORIGIN)
+        target_dot_attr = {'radius': 0.02, 'color': YELLOW_D}
+        back_dot_attr = {'radius': 0.007, 'color': GREY_C}
         coord_group = [(x, y) for y in range(-540, 540) for x in range(-960, 960) if
                        ((x - 12) / 24) % 1 == 0 and ((y - 12) / 24) % 1 == 0]
         dot_group = VGroup(*[Dot(point=axes.c2p(item[0], item[1]), radius=0.007, color=GREY_C) for item in coord_group])
@@ -987,27 +1128,12 @@ class Scene7(Scene):  # 168
         player = Dot(point=axes.c2p(player_x, player_y), radius=0.05, color="#8C3FC5")
         # 构建中心直线
         central_line = Line(start=player.get_center(), end=axes.c2p(cle_x, cle_y), stroke_width=2.5, color="#E73750")
-        # 获取中心直线的倾斜角并计算视野上下界的倾斜角
-        theta_1 = central_line.get_angle() - (sigma * DEGREES)
-        theta_2 = central_line.get_angle() + (sigma * DEGREES)
-        # 根据给定的视野上下界x轴坐标计算y轴坐标
-        fov1_y = (np.tan(theta_1) * (fov_x - player_x)) + player_y
-        fov2_y = (np.tan(theta_2) * (fov_x - player_x)) + player_y
-        # 构建视野上下界
-        fov1_l = DashedLine(start=player.get_center(), end=axes.c2p(fov_x, fov1_y), stroke_width=1.5, color="#8B8B8B",
-                            dash_length=0.2).set_opacity(0.7)
-        fov2_l = DashedLine(start=player.get_center(), end=axes.c2p(fov_x, fov2_y), stroke_width=1.5, color="#8B8B8B",
-                            dash_length=0.2).set_opacity(0.7)
-        # 获取候选要塞坐标集合
-        target_list, not_target_list = cords_generator(
+        # 构建视野上下界直线
+        fov1_l, fov2_l = fov(player, central_line, fov_x, player_x, player_y, axes, sigma)
+        # 获取候选要塞集合和非候选要塞集合
+        target_list, not_target_list, target_dot_group, not_target_dot_group = cords_generator(
             player.get_center()[0], player.get_center()[1], fov1_l.get_slope(), fov2_l.get_slope(),
-            1.28 * rate, 2.816 * rate, dot_group)
-        # 构建候选要塞点集合
-        target_dot_group = VGroup(
-            *[Dot(point=np.array((item[0], item[1], 0)), radius=0.02, color=YELLOW_D) for item in target_list])
-        not_target_dot_group = VGroup(
-            *[Dot(point=np.array((item[0], item[1], 0)), radius=0.007, color=GREY_C) for item in not_target_list])
-        print(len(target_dot_group))
+            1.28 * rate, 2.816 * rate, dot_group, target_dot_attr, back_dot_attr)
         target_dot_group_trans = VGroup(*[Dot(radius=0.05, color=YELLOW_D) for _ in range(len(target_dot_group))])
         target_dot_group_trans.arrange_in_grid(n_rows=5, n_cols=8, v_buff=0.3, h_buff=0.5).move_to([2, 0.8, 0])
         mask = Rectangle(
@@ -1045,25 +1171,16 @@ class Scene7(Scene):  # 168
             probabilities_increased[idx].set_color(color_matrix)
             probabilities_arranged[idx].set_color(color_arranged)
         # 创建转换动画组
-        animation_axe = Axes(
-            x_range=(0, 7),
-            y_range=(-4, 0),
-            height=Line(target_dot_group_trans[0], target_dot_group_trans[32]).get_length(),
-            width=Line(target_dot_group_trans[0], target_dot_group_trans[7]).get_length(),
-        ).move_to(target_dot_group_trans.get_center())
-        anim_dots = VGroup()
-        anim_texts = VGroup()
-        for r in range(0, 10):
-            anim_list_dots_sub = VGroup()
-            anim_list_texts_sub = VGroup()
-            for idx in range(len(target_dot_group_trans)):
-                loc_cor = animation_axe.p2c(target_dot_group_trans[idx].get_center())
-                x, y = round(loc_cor[0]), round(loc_cor[1])
-                if (r - 1) <= np.sqrt((x ** 2) + (y ** 2)) <= (r + 1):
-                    anim_list_dots_sub.add(target_dot_group_trans[idx])
-                    anim_list_texts_sub.add(probabilities[idx])
-            anim_dots.add(anim_list_dots_sub)
-            anim_texts.add(anim_list_texts_sub)
+        animation_axe = {
+            "x_range": (0, 7),
+            "y_range": (-4, 0),
+            "height": Line(target_dot_group_trans[0], target_dot_group_trans[32]).get_length(),
+            "width": Line(target_dot_group_trans[0], target_dot_group_trans[7]).get_length()
+        }
+        anim_dots = extension(center=target_dot_group_trans.get_center(), radius=10, group=target_dot_group_trans,
+                              axe_attr=animation_axe)
+        anim_texts = extension(center=target_dot_group_trans.get_center(), radius=10, group=probabilities,
+                               axe_attr=animation_axe)
         background = [not_target_dot_group, arc_text_1280, arc_text_2816, axes, annulus_fill, text_1280, text_2816,
                       central_line, origin, fov1_l, fov2_l, player, percentage, frame]
         self.add(not_target_dot_group, arc_text_1280, arc_text_2816, axes, annulus_fill, text_1280, text_2816,
